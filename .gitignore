@@ -1,0 +1,13 @@
+# Virtual environments
+.venv/
+.venv311/
+
+# Python
+__pycache__/
+*.pyc
+
+# Dataset, trained models, caches, exports (large, regenerate via --download/--train/--export)
+asl_project/
+
+# Editor
+.vscode/

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ASL Recognition</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>ASL Alphabet Recognition</h1>
+    <span id="status" class="status status-connecting">connecting…</span>
+  </header>
+
+  <main>
+    <section class="video-panel">
+      <div class="video-wrap">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div id="letterBadge" class="letter-badge">–</div>
+      </div>
+      <div class="progress-track">
+        <div id="progressFill" class="progress-fill"></div>
+      </div>
+      <p class="hint">Hold a sign steady for about {{ stable_seconds }}s at ≥{{ (conf_threshold * 100) | round | int }}% confidence to accept it.</p>
+    </section>
+
+    <section class="output-panel">
+      <label>Sentence</label>
+      <div id="sentence" class="sentence-box"></div>
+      <div class="controls">
+        <button id="btnSpace">Space</button>
+        <button id="btnBackspace">Backspace</button>
+        <button id="btnClear" class="danger">Clear</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

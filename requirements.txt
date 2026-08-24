@@ -1,0 +1,19 @@
+# Install with: pip install -r requirements.txt
+#
+# Note on the protobuf conflict (same issue as in Colab): mediapipe pins
+# protobuf<5, while recent TensorFlow needs protobuf>=5. If pip's resolver
+# complains, install in two steps instead:
+#   pip install mediapipe==0.10.14 kaggle scikit-learn seaborn tqdm
+#   pip install --upgrade "protobuf>=5.28,<6"
+# mediapipe works fine on the protobuf 5 runtime; its own pin is overly strict.
+
+tensorflow>=2.16
+mediapipe==0.10.14
+opencv-python
+numpy
+matplotlib
+seaborn
+scikit-learn
+tqdm
+kaggle
+flask
