@@ -1,18 +1,48 @@
 <!doctype html>
 <html lang="en">
 <head>
+<script>
+  (function() {
+    const saved = localStorage.getItem('tc-theme');
+    const theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    document.documentElement.setAttribute('data-theme', theme);
+  })();
+</script>
 <meta charset="utf-8">
-<title>Text → Braille</title>
+<title>TriConnect — Text → Braille</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
   <header>
-    <h1>Refreshable Braille Display</h1>
-    <nav class="site-nav">
-      <a href="/">Sign → Text</a>
-      <a href="/braille" class="active">Text → Braille</a>
-    </nav>
-    <span id="status" class="status status-connecting">disconnected</span>
+    <div class="brand">
+      <svg class="brand-logo" width="28" height="40" viewBox="0 0 28 40" aria-hidden="true">
+        <circle class="dot-off" cx="8" cy="8" r="4"></circle>
+        <circle class="dot-on" cx="8" cy="20" r="4"></circle>
+        <circle class="dot-on" cx="8" cy="32" r="4"></circle>
+        <circle class="dot-on" cx="20" cy="8" r="4"></circle>
+        <circle class="dot-on" cx="20" cy="20" r="4"></circle>
+        <circle class="dot-off" cx="20" cy="32" r="4"></circle>
+      </svg>
+      <div class="brand-text">
+        <span class="brand-word">TriConnect</span>
+        <span class="brand-tagline">SIGN · TEXT · BRAILLE</span>
+      </div>
+    </div>
+
+    <div class="header-controls">
+      <nav class="site-nav">
+        <a href="/">Sign → Text</a>
+        <a href="/braille" class="active">Text → Braille</a>
+      </nav>
+      <button id="themeToggle" class="icon-btn" type="button" aria-label="Toggle theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path></svg>
+      </button>
+      <span id="status" class="status-badge state-idle"><span class="dot"></span><span class="label">disconnected</span></span>
+    </div>
   </header>
 
   <main class="braille-main">
@@ -49,23 +79,30 @@
         </div>
         <div class="row">
           <button id="btnConnect" class="primary">Connect</button>
-          <button id="btnDisconnect">Disconnect</button>
+          <button id="btnDisconnect" class="ghost">Disconnect</button>
         </div>
         <div id="connectStatus" class="connect-status"></div>
       </div>
 
-      <div class="card">
-        <label>Current cell</label>
+      <div class="hero-card" id="cellHero">
+        <label>Current Cell</label>
         <div class="cell-display">
-          <div id="cellGlyph" class="cell-glyph">⠿</div>
+          <svg id="dotGrid" class="dot-grid" width="72" height="108" viewBox="0 0 72 108">
+            <circle class="dot-off" data-dot="1" cx="20" cy="20" r="10"></circle>
+            <circle class="dot-off" data-dot="2" cx="20" cy="54" r="10"></circle>
+            <circle class="dot-off" data-dot="3" cx="20" cy="88" r="10"></circle>
+            <circle class="dot-off" data-dot="4" cx="52" cy="20" r="10"></circle>
+            <circle class="dot-off" data-dot="5" cx="52" cy="54" r="10"></circle>
+            <circle class="dot-off" data-dot="6" cx="52" cy="88" r="10"></circle>
+          </svg>
           <div id="cellLetter" class="cell-letter">–</div>
           <div id="cellCaption" class="cell-caption">0 / 0</div>
         </div>
         <div class="playback-controls">
-          <button id="btnPrev">◀ Prev</button>
+          <button id="btnPrev" class="ghost">◀ Prev</button>
           <button id="btnPlay" class="primary">▶ Play</button>
-          <button id="btnNext">Next ▶</button>
-          <button id="btnReset">Reset</button>
+          <button id="btnNext" class="ghost">Next ▶</button>
+          <button id="btnReset" class="ghost">Reset</button>
         </div>
         <div class="speed-row">
           <label for="speedSlider">Speed: <span id="speedLabel">800ms / letter</span></label>
@@ -75,6 +112,7 @@
     </section>
   </main>
 
+  <script src="{{ url_for('static', filename='theme.js') }}"></script>
   <script src="{{ url_for('static', filename='braille.js') }}"></script>
 </body>
 </html>

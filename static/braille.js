@@ -4,7 +4,8 @@ const connectStatus = document.getElementById("connectStatus");
 const uploadStatus = document.getElementById("uploadStatus");
 const textInput = document.getElementById("textInput");
 const textPreview = document.getElementById("textPreview");
-const cellGlyph = document.getElementById("cellGlyph");
+const dotGrid = document.getElementById("dotGrid");
+const cellHero = document.getElementById("cellHero");
 const cellLetter = document.getElementById("cellLetter");
 const cellCaption = document.getElementById("cellCaption");
 const btnPlay = document.getElementById("btnPlay");
@@ -15,9 +16,31 @@ const fileDrop = document.getElementById("fileDrop");
 
 const POLL_MS = 300;
 
+// Standard Grade-1 English braille dot numbering:
+//   1 4
+//   2 5
+//   3 6
+const BRAILLE_DOTS = {
+  A: [1], B: [1, 2], C: [1, 4], D: [1, 4, 5], E: [1, 5],
+  F: [1, 2, 4], G: [1, 2, 4, 5], H: [1, 2, 5], I: [2, 4], J: [2, 4, 5],
+  K: [1, 3], L: [1, 2, 3], M: [1, 3, 4], N: [1, 3, 4, 5], O: [1, 3, 5],
+  P: [1, 2, 3, 4], Q: [1, 2, 3, 4, 5], R: [1, 2, 3, 5], S: [2, 3, 4], T: [2, 3, 4, 5],
+  U: [1, 3, 6], V: [1, 2, 3, 6], W: [2, 4, 5, 6], X: [1, 3, 4, 6], Y: [1, 3, 4, 5, 6],
+  Z: [1, 3, 5, 6],
+};
+
+function renderDots(letter) {
+  const active = new Set(BRAILLE_DOTS[letter] || []);
+  dotGrid.querySelectorAll("circle").forEach((circle) => {
+    const dotNum = Number(circle.dataset.dot);
+    circle.classList.toggle("dot-on", active.has(dotNum));
+    circle.classList.toggle("dot-off", !active.has(dotNum));
+  });
+}
+
 function setTopStatus(connected) {
-  statusEl.textContent = connected ? "connected" : "disconnected";
-  statusEl.className = "status " + (connected ? "status-live" : "status-connecting");
+  statusEl.querySelector(".label").textContent = connected ? "connected" : "disconnected";
+  statusEl.className = "status-badge state-" + (connected ? "live" : "idle");
 }
 
 async function api(path, opts) {
@@ -108,11 +131,15 @@ async function control(action, extra) {
 
 function applyStatus(data) {
   setTopStatus(data.connected);
-  cellGlyph.textContent = data.current_unicode || "⠀";
+  renderDots(data.current_char);
   cellLetter.textContent = data.current_char || "–";
   cellCaption.textContent = `${data.index} / ${data.length}`;
   btnPlay.textContent = data.playing ? "⏸ Pause" : "▶ Play";
   textPreview.innerHTML = renderPreview(data.text, data.index);
+
+  const signal = Boolean(data.current_char);
+  cellHero.classList.toggle("has-signal", signal);
+  cellHero.classList.toggle("hero-pulse", signal && data.playing);
 }
 
 function renderPreview(text, index) {

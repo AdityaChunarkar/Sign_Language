@@ -1,0 +1,16 @@
+.venv311/
+.venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+*.zip
+.DS_Store
+node_modules/
+
+# Skip the large raw dataset/checkpoint folders to keep the image small.
+# Do NOT ignore asl_project/asl_model_export/ -- the app loads that at
+# runtime and there's no training step in the cloud to regenerate it.
+asl_project/dataset/
+asl_project/checkpoints/
+asl_project/*.npz
