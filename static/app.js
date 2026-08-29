@@ -6,32 +6,62 @@ const letterBadge = document.getElementById("letterBadge");
 const progressFill = document.getElementById("progressFill");
 const sentenceEl = document.getElementById("sentence");
 
+const cameraSelect = document.getElementById("cameraSelect");
+
 const captureCanvas = document.createElement("canvas");
 const captureCtx = captureCanvas.getContext("2d");
 
 const PREDICT_INTERVAL_MS = 200;
 let busy = false;
+let currentStream = null;
 
 function setStatus(text, cls) {
   statusEl.textContent = text;
   statusEl.className = "status " + cls;
 }
 
-async function startCamera() {
+async function listCameras() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const cams = devices.filter((d) => d.kind === "videoinput");
+  cameraSelect.innerHTML = "";
+  cams.forEach((cam, i) => {
+    const opt = document.createElement("option");
+    opt.value = cam.deviceId;
+    opt.textContent = cam.label || `Camera ${i + 1}`;
+    cameraSelect.appendChild(opt);
+  });
+  return cams;
+}
+
+async function startCamera(deviceId) {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480 },
+    if (currentStream) {
+      currentStream.getTracks().forEach((t) => t.stop());
+    }
+    const constraints = {
+      video: deviceId
+        ? { deviceId: { exact: deviceId }, width: 640, height: 480 }
+        : { width: 640, height: 480 },
       audio: false,
-    });
+    };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    currentStream = stream;
     video.srcObject = stream;
     await video.play();
     captureCanvas.width = video.videoWidth || 640;
     captureCanvas.height = video.videoHeight || 480;
     resizeOverlay();
     setStatus("live", "status-live");
-    tick();
+
+    // Labels are only populated after permission is granted, so refresh
+    // the dropdown once we actually have a stream.
+    await listCameras();
+    const activeTrack = stream.getVideoTracks()[0];
+    const activeId = activeTrack && activeTrack.getSettings().deviceId;
+    if (activeId) cameraSelect.value = activeId;
   } catch (err) {
     setStatus("camera error: " + err.message, "status-error");
+    await listCameras();
   }
 }
 
@@ -113,4 +143,10 @@ window.addEventListener("keydown", (e) => {
   else if (e.code === "Backspace") { e.preventDefault(); sendControl("backspace"); }
 });
 
-startCamera();
+cameraSelect.addEventListener("change", () => startCamera(cameraSelect.value));
+
+if (navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener("devicechange", listCameras);
+}
+
+listCameras().then(() => startCamera());

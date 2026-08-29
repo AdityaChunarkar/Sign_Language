@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Text → Braille</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>Refreshable Braille Display</h1>
+    <nav class="site-nav">
+      <a href="/">Sign → Text</a>
+      <a href="/braille" class="active">Text → Braille</a>
+    </nav>
+    <span id="status" class="status status-connecting">disconnected</span>
+  </header>
+
+  <main class="braille-main">
+    <section>
+      <div class="card">
+        <label for="textInput">Type text</label>
+        <textarea id="textInput" placeholder="Type something to display on the braille cell…"></textarea>
+        <div class="row">
+          <button id="btnSendText" class="primary">Load text</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <label>Or upload a PDF</label>
+        <div class="file-drop" id="fileDrop">
+          <input type="file" id="pdfInput" accept="application/pdf">
+          Click to choose a PDF, or drag one here
+        </div>
+        <div id="uploadStatus" class="connect-status"></div>
+      </div>
+
+      <div class="card">
+        <label>Loaded text</label>
+        <div id="textPreview" class="text-preview">(nothing loaded yet)</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="card">
+        <label>Serial connection</label>
+        <div class="row">
+          <select id="portSelect"></select>
+          <button id="btnRefreshPorts">Refresh</button>
+        </div>
+        <div class="row">
+          <button id="btnConnect" class="primary">Connect</button>
+          <button id="btnDisconnect">Disconnect</button>
+        </div>
+        <div id="connectStatus" class="connect-status"></div>
+      </div>
+
+      <div class="card">
+        <label>Current cell</label>
+        <div class="cell-display">
+          <div id="cellGlyph" class="cell-glyph">⠿</div>
+          <div id="cellLetter" class="cell-letter">–</div>
+          <div id="cellCaption" class="cell-caption">0 / 0</div>
+        </div>
+        <div class="playback-controls">
+          <button id="btnPrev">◀ Prev</button>
+          <button id="btnPlay" class="primary">▶ Play</button>
+          <button id="btnNext">Next ▶</button>
+          <button id="btnReset">Reset</button>
+        </div>
+        <div class="speed-row">
+          <label for="speedSlider">Speed: <span id="speedLabel">800ms / letter</span></label>
+          <input type="range" id="speedSlider" min="200" max="2500" step="50" value="800">
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='braille.js') }}"></script>
+</body>
+</html>

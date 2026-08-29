@@ -17,12 +17,14 @@ then open http://localhost:5000
 """
 
 import base64
+import io
 import time
 from collections import Counter, deque
 
 import cv2
 import numpy as np
 from flask import Flask, jsonify, render_template, request
+from pypdf import PdfReader
 
 from asl_model import (
     CFG,
@@ -31,8 +33,10 @@ from asl_model import (
     load_models_for_inference,
     mp_hands,
 )
+from braille_controller import BrailleController
 
 app = Flask(__name__)
+braille_ctl = BrailleController()
 
 print("Loading models...")
 IMAGE_MODEL, LANDMARK_MODEL = load_models_for_inference()
@@ -68,6 +72,77 @@ def index():
         conf_threshold=CFG["CONF_THRESHOLD"],
         stable_seconds=CFG["STABLE_SECONDS"],
     )
+
+
+@app.route("/braille")
+def braille_page():
+    return render_template("braille.html")
+
+
+@app.route("/braille/ports")
+def braille_ports():
+    return jsonify({"ports": braille_ctl.list_ports()})
+
+
+@app.route("/braille/connect", methods=["POST"])
+def braille_connect():
+    port = request.get_json(force=True).get("port")
+    try:
+        braille_ctl.connect(port)
+        return jsonify(braille_ctl.status())
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@app.route("/braille/disconnect", methods=["POST"])
+def braille_disconnect():
+    braille_ctl.disconnect()
+    return jsonify(braille_ctl.status())
+
+
+@app.route("/braille/text", methods=["POST"])
+def braille_text():
+    text = request.get_json(force=True).get("text", "")
+    braille_ctl.set_text(text)
+    return jsonify(braille_ctl.status())
+
+
+@app.route("/braille/upload", methods=["POST"])
+def braille_upload():
+    f = request.files.get("pdf")
+    if f is None:
+        return jsonify({"ok": False, "error": "No file uploaded"}), 400
+    try:
+        reader = PdfReader(io.BytesIO(f.read()))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Could not read PDF: {e}"}), 400
+    braille_ctl.set_text(text)
+    return jsonify(braille_ctl.status())
+
+
+@app.route("/braille/control", methods=["POST"])
+def braille_control():
+    body = request.get_json(force=True)
+    action = body.get("action")
+    if action == "play":
+        braille_ctl.play()
+    elif action == "pause":
+        braille_ctl.pause()
+    elif action == "next":
+        braille_ctl.next_char()
+    elif action == "prev":
+        braille_ctl.prev_char()
+    elif action == "reset":
+        braille_ctl.reset()
+    elif action == "speed":
+        braille_ctl.set_speed(body.get("delay_ms", 800))
+    return jsonify(braille_ctl.status())
+
+
+@app.route("/braille/status")
+def braille_status():
+    return jsonify(braille_ctl.status())
 
 
 @app.route("/predict", methods=["POST"])

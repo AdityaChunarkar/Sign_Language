@@ -17,3 +17,5 @@ scikit-learn
 tqdm
 kaggle
 flask
+pyserial
+pypdf

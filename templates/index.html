@@ -8,11 +8,19 @@
 <body>
   <header>
     <h1>ASL Alphabet Recognition</h1>
+    <nav class="site-nav">
+      <a href="/" class="active">Sign → Text</a>
+      <a href="/braille">Text → Braille</a>
+    </nav>
     <span id="status" class="status status-connecting">connecting…</span>
   </header>
 
   <main>
     <section class="video-panel">
+      <div class="camera-picker">
+        <label for="cameraSelect">Camera</label>
+        <select id="cameraSelect"></select>
+      </div>
       <div class="video-wrap">
         <video id="video" autoplay playsinline muted></video>
         <canvas id="overlay"></canvas>
