@@ -198,6 +198,6 @@ yet publish wheels for newer Python releases.
 
 The Arduino is connected over USB serial directly to whichever machine runs
 `webapp.py`. A cloud host has no physical path to that port, so `/braille`
-only makes sense run locally (or on your LAN) — hosting it publicly could
+only makes sense run locally (or on your lan) — hosting it publicly could
 only ever demo the text/PDF/playback UI with no hardware attached, not
 actually drive the display.
