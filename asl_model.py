@@ -31,6 +31,7 @@ USAGE
     python asl_model.py --collect-personal      # collect your own hand via webcam
     python asl_model.py --finetune              # fine-tune on your personal data
     python asl_model.py --export                # export models + config to a portable folder
+    python asl_model.py --train-personal        # train/export from the bundled labeled crops
     python asl_model.py --realtime              # live webcam recognition + word building
     python asl_model.py --all                   # run every stage above, in order
 
@@ -48,6 +49,7 @@ NOTES
 """
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -56,8 +58,10 @@ import random
 import shutil
 import sys
 import time
+import urllib.request
 import zipfile
 from collections import Counter, deque
+from pathlib import PurePosixPath
 
 # ----------------------------------------------------------------------
 # Dependency check — fail fast with a clear message instead of a traceback
@@ -127,6 +131,13 @@ BASE_DIR = os.path.join(SCRIPT_DIR, "asl_project")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 DATA_CACHE = os.path.join(BASE_DIR, "processed_asl.npz")
 PERSONAL_CACHE = os.path.join(BASE_DIR, "personal_asl.npz")
+PERSONAL_DATA_CACHE = os.path.join(BASE_DIR, "personal_training_asl.npz")
+PERSONAL_DATASET_ZIP = os.path.join(SCRIPT_DIR, "Copy of ASL_personal_dataset.zip")
+HAND_MODEL_PATH = os.path.join(MODELS_DIR, "hand_landmarker.task")
+HAND_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+    "hand_landmarker/float16/1/hand_landmarker.task"
+)
 TUNED_CFG_PATH = os.path.join(MODELS_DIR, "tuned_config.json")
 EXPORT_DIR = os.path.join(BASE_DIR, "asl_model_export")
 DATASET_ZIP = os.path.join(BASE_DIR, "asl-alphabet.zip")
@@ -196,8 +207,87 @@ def download_dataset():
 # ------------------------------------------------------------------
 # MediaPipe hand detection, cropping & landmark extraction
 # ------------------------------------------------------------------
-mp_hands = mp.solutions.hands
-mp_drawing = mp.solutions.drawing_utils
+_mp_solutions = getattr(mp, "solutions", None)
+mp_hands = getattr(_mp_solutions, "hands", None)
+mp_drawing = getattr(_mp_solutions, "drawing_utils", None)
+_has_tasks_hands = (
+    hasattr(mp, "tasks") and hasattr(mp.tasks.vision, "HandLandmarker")
+)
+
+if mp_hands is None and not _has_tasks_hands:
+    raise RuntimeError(
+        "This MediaPipe installation exposes neither the legacy Hands API nor "
+        "the Tasks HandLandmarker API. Install a supported MediaPipe version."
+    )
+
+HAND_CONNECTIONS = (
+    mp_hands.HAND_CONNECTIONS
+    if mp_hands is not None
+    else mp.tasks.vision.HandLandmarksConnections.HAND_CONNECTIONS
+)
+
+
+def _ensure_hand_landmarker_model():
+    if os.path.exists(HAND_MODEL_PATH):
+        return
+    print("Downloading MediaPipe hand-landmarker task model...")
+    urllib.request.urlretrieve(HAND_MODEL_URL, HAND_MODEL_PATH)
+    if not os.path.isfile(HAND_MODEL_PATH) or os.path.getsize(HAND_MODEL_PATH) == 0:
+        raise RuntimeError(f"MediaPipe hand-landmarker model download was empty: {HAND_MODEL_PATH}")
+
+
+def create_hands_detector(
+    static_image_mode=False,
+    max_num_hands=1,
+    min_detection_confidence=0.6,
+    min_tracking_confidence=0.6,
+    model_complexity=1,
+):
+    """Create a hand detector using the MediaPipe API available at runtime."""
+    if mp_hands is not None:
+        return mp_hands.Hands(
+            static_image_mode=static_image_mode,
+            max_num_hands=max_num_hands,
+            min_detection_confidence=min_detection_confidence,
+            min_tracking_confidence=min_tracking_confidence,
+            model_complexity=model_complexity,
+        )
+
+    _ensure_hand_landmarker_model()
+    vision = mp.tasks.vision
+    running_mode = (
+        vision.RunningMode.IMAGE if static_image_mode else vision.RunningMode.VIDEO
+    )
+    options = vision.HandLandmarkerOptions(
+        base_options=mp.tasks.BaseOptions(model_asset_path=HAND_MODEL_PATH),
+        running_mode=running_mode,
+        num_hands=max_num_hands,
+        min_hand_detection_confidence=min_detection_confidence,
+        min_tracking_confidence=min_tracking_confidence,
+    )
+    return vision.HandLandmarker.create_from_options(options)
+
+
+def draw_hand_landmarks(image_bgr, hand_landmarks):
+    if mp_drawing is not None and hasattr(hand_landmarks, "landmark"):
+        mp_drawing.draw_landmarks(image_bgr, hand_landmarks, HAND_CONNECTIONS)
+        return
+
+    height, width = image_bgr.shape[:2]
+    points = [
+        (int(point.x * width), int(point.y * height))
+        for point in getattr(hand_landmarks, "landmark", hand_landmarks)
+    ]
+    for connection in HAND_CONNECTIONS:
+        cv2.line(
+            image_bgr,
+            points[connection.start],
+            points[connection.end],
+            (255, 255, 255),
+            2,
+        )
+    for x, y in points:
+        cv2.circle(image_bgr, (x, y), 4, (0, 140, 255), -1)
 
 
 def normalize_landmarks(landmarks_21x3, handedness_label):
@@ -216,8 +306,9 @@ def crop_hand_region(image_bgr, hand_landmarks, margin=None):
     if margin is None:
         margin = CFG["HAND_MARGIN"]
     h, w = image_bgr.shape[:2]
-    xs = [p.x for p in hand_landmarks.landmark]
-    ys = [p.y for p in hand_landmarks.landmark]
+    points = getattr(hand_landmarks, "landmark", hand_landmarks)
+    xs = [p.x for p in points]
+    ys = [p.y for p in points]
     x1, x2 = min(xs) * w, max(xs) * w
     y1, y2 = min(ys) * h, max(ys) * h
     mx, my = (x2 - x1) * margin, (y2 - y1) * margin
@@ -230,18 +321,38 @@ def crop_hand_region(image_bgr, hand_landmarks, margin=None):
     return crop, (x1, y1, x2, y2)
 
 
-def extract_from_image(image_bgr, hands_detector):
+def extract_from_image(image_bgr, hands_detector, timestamp_ms=None):
     """Run MediaPipe on one BGR image -> (crop_rgb_uint8, landmark_vec_63, bbox, hand) or Nones."""
     rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    res = hands_detector.process(rgb)
-    if not res.multi_hand_landmarks:
-        return None, None, None, None
-    hand = res.multi_hand_landmarks[0]
-    handed = res.multi_handedness[0].classification[0].label if res.multi_handedness else "Right"
+    if hasattr(hands_detector, "process"):
+        res = hands_detector.process(rgb)
+        if not res.multi_hand_landmarks:
+            return None, None, None, None
+        hand = res.multi_hand_landmarks[0]
+        handed = (
+            res.multi_handedness[0].classification[0].label
+            if res.multi_handedness
+            else "Right"
+        )
+    else:
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        if timestamp_ms is None:
+            res = hands_detector.detect(mp_image)
+        else:
+            res = hands_detector.detect_for_video(mp_image, timestamp_ms)
+        if not res.hand_landmarks:
+            return None, None, None, None
+        hand = res.hand_landmarks[0]
+        handed = (
+            res.handedness[0][0].category_name
+            if res.handedness and res.handedness[0]
+            else "Right"
+        )
     crop, bbox = crop_hand_region(image_bgr, hand)
     if crop is None:
         return None, None, None, None
-    lm = np.array([[p.x, p.y, p.z] for p in hand.landmark], dtype=np.float32)
+    points = getattr(hand, "landmark", hand)
+    lm = np.array([[p.x, p.y, p.z] for p in points], dtype=np.float32)
     vec = normalize_landmarks(lm, handed)
     return cv2.cvtColor(crop, cv2.COLOR_BGR2RGB), vec, bbox, hand
 
@@ -259,8 +370,12 @@ def preprocess_dataset(show_sanity_plot=True):
 
     imgs, lms, labels = [], [], []
     import glob
-    with mp_hands.Hands(static_image_mode=True, max_num_hands=1,
-                         min_detection_confidence=0.5, model_complexity=1) as hands:
+    with create_hands_detector(
+        static_image_mode=True,
+        max_num_hands=1,
+        min_detection_confidence=0.5,
+        model_complexity=1,
+    ) as hands:
         for letter in tqdm(LETTERS, desc="Letters"):
             folder = os.path.join(DATASET_ROOT, letter)
             files_list = sorted(glob.glob(os.path.join(folder, "*.jpg")))
@@ -297,6 +412,108 @@ def preprocess_dataset(show_sanity_plot=True):
             ax.axis("off")
         plt.suptitle("Cropped hand images — the 16 'hard' letters")
         plt.show()
+
+
+def preprocess_personal_dataset(zip_path=PERSONAL_DATASET_ZIP):
+    """Load the labeled personal crops and recorded landmarks into a training cache."""
+    if os.path.exists(PERSONAL_DATA_CACHE):
+        print("Personal training cache already exists at", PERSONAL_DATA_CACHE)
+        return
+    if not os.path.isfile(zip_path):
+        sys.exit(f"Personal dataset zip not found: {zip_path}")
+
+    images, landmarks, labels = [], [], []
+    with zipfile.ZipFile(zip_path) as archive:
+        metadata_paths = [
+            path for path in archive.namelist()
+            if PurePosixPath(path).name == "metadata.csv"
+        ]
+        if len(metadata_paths) != 1:
+            raise ValueError(
+                f"Expected exactly one metadata.csv in the personal archive; "
+                f"found {len(metadata_paths)}."
+            )
+        with archive.open(metadata_paths[0]) as metadata_file:
+            rows = csv.DictReader(
+                line.decode("utf-8-sig") for line in metadata_file
+            )
+            for sample_number, row in enumerate(rows, start=1):
+                letter = (row.get("letter") or "").strip().upper()
+                if letter not in LETTER_TO_IDX:
+                    raise ValueError(
+                        f"Personal dataset sample {sample_number} has an invalid letter label."
+                    )
+
+                relative_path = PurePosixPath(
+                    (row.get("file") or "").replace("\\", "/")
+                )
+                if relative_path.is_absolute() or ".." in relative_path.parts:
+                    raise ValueError(
+                        f"Personal dataset sample {sample_number} has an unsafe image path."
+                    )
+                if not relative_path.parts:
+                    raise ValueError(
+                        f"Personal dataset sample {sample_number} has no image path."
+                    )
+                crop_path = (
+                    relative_path
+                    if relative_path.parts[0] == "crops"
+                    else PurePosixPath("crops") / relative_path
+                )
+                try:
+                    encoded = np.frombuffer(archive.read(str(crop_path)), dtype=np.uint8)
+                except KeyError as exc:
+                    raise ValueError(
+                        f"Personal dataset sample {sample_number} image is missing from the archive."
+                    ) from exc
+                image_bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+                if image_bgr is None:
+                    raise ValueError(
+                        f"Personal dataset sample {sample_number} image could not be decoded."
+                    )
+                image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+                image_rgb = cv2.resize(
+                    image_rgb,
+                    (CFG["IMG_SIZE"], CFG["IMG_SIZE"]),
+                    interpolation=cv2.INTER_AREA,
+                )
+
+                raw_landmarks = np.asarray(
+                    [
+                        [
+                            float(row[f"lm{index}_{axis}"])
+                            for axis in ("x", "y", "z")
+                        ]
+                        for index in range(21)
+                    ],
+                    dtype=np.float32,
+                )
+                vector = normalize_landmarks(
+                    raw_landmarks, (row.get("handedness") or "Right").strip()
+                )
+                images.append(image_rgb)
+                landmarks.append(vector)
+                labels.append(LETTER_TO_IDX[letter])
+
+    y_all = np.asarray(labels, dtype=np.int64)
+    class_counts = Counter(y_all.tolist())
+    missing_letters = [letter for letter in LETTERS if not class_counts[LETTER_TO_IDX[letter]]]
+    if missing_letters:
+        raise ValueError(
+            "Personal dataset must include samples for all 26 letters; missing: "
+            + ", ".join(missing_letters)
+        )
+
+    np.savez_compressed(
+        PERSONAL_DATA_CACHE,
+        X_img=np.stack(images).astype(np.uint8),
+        X_lm=np.stack(landmarks).astype(np.float32),
+        y=y_all,
+    )
+    print("Personal training cache saved to", PERSONAL_DATA_CACHE)
+    print("Samples:", len(y_all), "| per-class:", dict(sorted(
+        (LETTERS[index], count) for index, count in class_counts.items()
+    )))
 
 
 # ------------------------------------------------------------------
@@ -482,10 +699,13 @@ def make_callbacks(ckpt_path, patience=6):
     ]
 
 
-def _load_data_cache():
-    if not os.path.exists(DATA_CACHE):
-        sys.exit("processed_asl.npz not found. Run: python asl_model.py --preprocess")
-    c = np.load(DATA_CACHE)
+def _load_data_cache(cache_path=DATA_CACHE):
+    if not os.path.exists(cache_path):
+        sys.exit(
+            f"Training cache not found at {cache_path}. "
+            "Run the matching preprocess stage first."
+        )
+    c = np.load(cache_path)
     return c["X_img"], c["X_lm"], c["y"]
 
 
@@ -499,8 +719,8 @@ def _train_val_split(y_all):
 # ------------------------------------------------------------------
 # Stage: train
 # ------------------------------------------------------------------
-def train_models():
-    X_img, X_lm, y_all = _load_data_cache()
+def train_models(cache_path=DATA_CACHE):
+    X_img, X_lm, y_all = _load_data_cache(cache_path)
     train_idx, val_idx = _train_val_split(y_all)
     y_train, y_val = y_all[train_idx], y_all[val_idx]
     print(f"Train: {len(train_idx)}  |  Val: {len(val_idx)}")
@@ -582,11 +802,11 @@ def train_models():
 # ------------------------------------------------------------------
 # Stage: evaluate (+ confusion-driven retraining)
 # ------------------------------------------------------------------
-def evaluate_models():
+def evaluate_models(cache_path=DATA_CACHE):
     if not (os.path.exists(IMG_CKPT) and os.path.exists(LM_CKPT)):
         sys.exit("Checkpoints not found. Run: python asl_model.py --train")
 
-    X_img, X_lm, y_all = _load_data_cache()
+    X_img, X_lm, y_all = _load_data_cache(cache_path)
     train_idx, val_idx = _train_val_split(y_all)
     y_train, y_val = y_all[train_idx], y_all[val_idx]
 
@@ -733,9 +953,14 @@ def collect_personal_dataset(letters=None, per_letter=None):
     done_counts = Counter(P_y)
 
     cam = LocalWebcam()
-    hands = mp_hands.Hands(static_image_mode=False, max_num_hands=1,
-                            min_detection_confidence=0.6,
-                            min_tracking_confidence=0.6, model_complexity=1)
+    hands = create_hands_detector(
+        static_image_mode=False,
+        max_num_hands=1,
+        min_detection_confidence=0.6,
+        min_tracking_confidence=0.6,
+        model_complexity=1,
+    )
+    last_timestamp_ms = 0
     window = "ASL - Personal Data Collection  (s: capture  n: skip letter  q: quit)"
     quit_all = False
     try:
@@ -750,12 +975,17 @@ def collect_personal_dataset(letters=None, per_letter=None):
                 frame = cam.read()
                 if frame is None:
                     continue
-                crop, vec, bbox, hand_lms = extract_from_image(frame, hands)
+                last_timestamp_ms = max(
+                    int(time.monotonic() * 1000), last_timestamp_ms + 1
+                )
+                crop, vec, bbox, hand_lms = extract_from_image(
+                    frame, hands, timestamp_ms=last_timestamp_ms
+                )
                 overlay = frame.copy()
                 if bbox is not None:
                     x1, y1, x2, y2 = bbox
                     cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    mp_drawing.draw_landmarks(overlay, hand_lms, mp_hands.HAND_CONNECTIONS)
+                    draw_hand_landmarks(overlay, hand_lms)
                 msg = f"SIGN '{letter}'  [{have}/{per_letter}]  " + \
                       ("CAPTURING - vary angle/distance" if capturing else "press 's' to capture")
                 cv2.rectangle(overlay, (0, 0), (640, 34), (0, 0, 0), -1)
@@ -941,7 +1171,11 @@ def load_models_for_inference():
     label_path = os.path.join(EXPORT_DIR, "label_encoder.json")
     cfg_path = os.path.join(EXPORT_DIR, "config.json")
     if not (os.path.exists(label_path) and os.path.exists(cfg_path)):
-        sys.exit("No exported model found. Run: python asl_model.py --export")
+        sys.exit(
+            "No exported ASL model found. Run "
+            "`python asl_model.py --train-personal` or copy an existing "
+            "asl_model_export folder into asl_project/."
+        )
 
     with open(label_path) as f:
         LETTERS = json.load(f)["classes"]
@@ -955,6 +1189,13 @@ def load_models_for_inference():
 
     img_path = _pick("image_model_personal.keras", "image_model_best.keras")
     lm_path = _pick("landmark_model_personal.keras", "landmark_model_best.keras")
+    missing_models = [path for path in (img_path, lm_path) if not os.path.isfile(path)]
+    if missing_models:
+        sys.exit(
+            "The ASL export is missing trained model weights. Run "
+            "`python asl_model.py --train-personal` or copy both model files "
+            "from an existing export."
+        )
     image_model = tf.keras.models.load_model(img_path, compile=False, custom_objects=CUSTOM_OBJECTS)
     landmark_model = tf.keras.models.load_model(lm_path, compile=False, custom_objects=CUSTOM_OBJECTS)
     print("Loaded image model   :", img_path)
@@ -969,6 +1210,7 @@ def load_models_for_inference():
 def run_realtime_recognition(image_model, landmark_model, max_minutes=10):
     conf_gate = float(CFG["CONF_THRESHOLD"])
     stable_secs = float(CFG["STABLE_SECONDS"])
+    history_window_secs = max(stable_secs * 3.0, 3.0)
     alpha = float(CFG["FUSION_ALPHA"])
 
     history = deque()
@@ -982,9 +1224,14 @@ def run_realtime_recognition(image_model, landmark_model, max_minutes=10):
     t_start = time.time()
 
     cam = LocalWebcam()
-    hands = mp_hands.Hands(static_image_mode=False, max_num_hands=1,
-                            min_detection_confidence=0.6,
-                            min_tracking_confidence=0.6, model_complexity=1)
+    hands = create_hands_detector(
+        static_image_mode=False,
+        max_num_hands=1,
+        min_detection_confidence=0.6,
+        min_tracking_confidence=0.6,
+        model_complexity=1,
+    )
+    last_timestamp_ms = 0
     window = "ASL Real-Time Recognition"
     try:
         while (time.time() - t_start) < max_minutes * 60:
@@ -992,7 +1239,12 @@ def run_realtime_recognition(image_model, landmark_model, max_minutes=10):
             if frame is None:
                 continue
             now = time.time()
-            crop, vec, bbox, hand_lms = extract_from_image(frame, hands)
+            last_timestamp_ms = max(
+                int(time.monotonic() * 1000), last_timestamp_ms + 1
+            )
+            crop, vec, bbox, hand_lms = extract_from_image(
+                frame, hands, timestamp_ms=last_timestamp_ms
+            )
             overlay = frame.copy()
 
             pred_letter, pred_conf = None, 0.0
@@ -1006,9 +1258,11 @@ def run_realtime_recognition(image_model, landmark_model, max_minutes=10):
 
                 x1, y1, x2, y2 = bbox
                 cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                mp_drawing.draw_landmarks(overlay, hand_lms, mp_hands.HAND_CONNECTIONS)
+                draw_hand_landmarks(overlay, hand_lms)
+            else:
+                history.clear()
 
-            while history and now - history[0][0] > stable_secs * 1.2:
+            while history and now - history[0][0] > history_window_secs:
                 history.popleft()
 
             if last_accepted is not None and not ready_for_repeat:
@@ -1098,6 +1352,17 @@ def main():
     parser.add_argument("--download", action="store_true", help="Download & unzip the Kaggle ASL alphabet dataset")
     parser.add_argument("--preprocess", action="store_true", help="MediaPipe crop + landmark extraction (cached)")
     parser.add_argument("--train", action="store_true", help="Train the image + landmark models")
+    parser.add_argument(
+        "--train-personal",
+        action="store_true",
+        help="Train, evaluate, and export both models from the bundled personal dataset zip",
+    )
+    parser.add_argument(
+        "--personal-zip",
+        type=str,
+        default=PERSONAL_DATASET_ZIP,
+        help="Personal labeled crop archive used by --train-personal",
+    )
     parser.add_argument("--evaluate", action="store_true", help="Evaluate + confusion-driven retraining")
     parser.add_argument("--collect-personal", action="store_true", help="Collect your own hand dataset via webcam")
     parser.add_argument("--finetune", action="store_true", help="Fine-tune models on your personal dataset")
@@ -1112,7 +1377,7 @@ def main():
     args = parser.parse_args()
 
     ran_anything = any([
-        args.download, args.preprocess, args.train, args.evaluate,
+        args.download, args.preprocess, args.train, args.train_personal, args.evaluate,
         args.collect_personal, args.finetune, args.export, args.realtime, args.all,
     ])
     if not ran_anything:
@@ -1139,6 +1404,11 @@ def main():
         preprocess_dataset()
     if args.train:
         train_models()
+    if args.train_personal:
+        preprocess_personal_dataset(args.personal_zip)
+        train_models(PERSONAL_DATA_CACHE)
+        evaluate_models(PERSONAL_DATA_CACHE)
+        export_models()
     if args.evaluate:
         evaluate_models()
     if args.collect_personal:

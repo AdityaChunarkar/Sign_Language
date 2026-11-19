@@ -13,7 +13,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20261119-0112') }}">
 </head>
 <body>
   <header>
@@ -63,7 +63,6 @@
           <p>Enable your camera to begin signing</p>
         </div>
       </div>
-      <p class="hint">Hold a sign steady for about {{ stable_seconds }}s at ≥{{ (conf_threshold * 100) | round | int }}% confidence to accept it.</p>
     </section>
 
     <section class="output-panel">
@@ -89,6 +88,6 @@
   </main>
 
   <script src="{{ url_for('static', filename='theme.js') }}"></script>
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='20261119-0112') }}"></script>
 </body>
 </html>

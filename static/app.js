@@ -17,6 +17,7 @@ const captureCtx = captureCanvas.getContext("2d");
 
 const PREDICT_INTERVAL_MS = 200;
 let busy = false;
+let ticking = false;
 let currentStream = null;
 
 function accentColor() {
@@ -56,11 +57,18 @@ async function startCamera(deviceId) {
     currentStream = stream;
     video.srcObject = stream;
     await video.play();
-    captureCanvas.width = video.videoWidth || 640;
-    captureCanvas.height = video.videoHeight || 480;
+    const sourceWidth = video.videoWidth || 640;
+    const sourceHeight = video.videoHeight || 480;
+    const scale = Math.min(1, 640 / sourceWidth, 480 / sourceHeight);
+    captureCanvas.width = Math.round(sourceWidth * scale);
+    captureCanvas.height = Math.round(sourceHeight * scale);
     resizeOverlay();
     setStatus("live", "live");
     cameraIdle.classList.add("hidden");
+    if (!ticking) {
+      ticking = true;
+      tick();
+    }
 
     // Labels are only populated after permission is granted, so refresh
     // the dropdown once we actually have a stream.
@@ -82,16 +90,36 @@ function resizeOverlay() {
 }
 window.addEventListener("resize", resizeOverlay);
 
-function drawBBox(bbox) {
+function drawBBox(bbox, landmarks, connections) {
   ctx.clearRect(0, 0, overlay.width, overlay.height);
-  if (!bbox) return;
-  const x1 = bbox.x1 * overlay.width;
-  const y1 = bbox.y1 * overlay.height;
-  const x2 = bbox.x2 * overlay.width;
-  const y2 = bbox.y2 * overlay.height;
-  ctx.strokeStyle = accentColor();
-  ctx.lineWidth = 2;
-  ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+  if (landmarks && landmarks.length) {
+    ctx.strokeStyle = accentColor();
+    ctx.fillStyle = accentColor();
+    ctx.lineWidth = 2;
+    (connections || []).forEach(([start, end]) => {
+      const first = landmarks[start];
+      const second = landmarks[end];
+      if (!first || !second) return;
+      ctx.beginPath();
+      ctx.moveTo(first.x * overlay.width, first.y * overlay.height);
+      ctx.lineTo(second.x * overlay.width, second.y * overlay.height);
+      ctx.stroke();
+    });
+    landmarks.forEach((point) => {
+      ctx.beginPath();
+      ctx.arc(point.x * overlay.width, point.y * overlay.height, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+  if (bbox) {
+    const x1 = bbox.x1 * overlay.width;
+    const y1 = bbox.y1 * overlay.height;
+    const x2 = bbox.x2 * overlay.width;
+    const y2 = bbox.y2 * overlay.height;
+    ctx.strokeStyle = accentColor();
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+  }
 }
 
 async function tick() {
@@ -116,24 +144,42 @@ async function tick() {
 }
 
 function applyPrediction(data) {
-  drawBBox(data.bbox);
+  drawBBox(data.bbox, data.landmarks, data.connections);
 
   let badgeColorVar = "--text-muted";
   let heroText = "–";
-  let captionText = "Waiting for a hand…";
+  let captionText = "No hand detected — keep your hand in view";
   let signal = false;
 
   if (data.hand_detected) {
     const pct = (data.pred_conf * 100).toFixed(0);
     heroText = data.pred_letter;
-    if (data.pred_conf < data.conf_gate) {
+    const progress = Math.round((data.progress || 0) * 100);
+    const stableConfidence = Math.round((data.stable_confidence || 0) * 100);
+    const stableFraction = Math.round((data.stable_fraction || 0) * 100);
+    if (data.accepted_letter) {
+      badgeColorVar = "--accent";
+      captionText = `Accepted ${data.accepted_letter} — change sign to enter another letter`;
+      setStatus("letter added", "live");
+      signal = true;
+    } else if (data.stable_letter && data.stable_confidence < data.conf_gate) {
       badgeColorVar = "--warn";
-      captionText = `Uncertain — ${pct}% confidence`;
+      captionText = `Recent average ${stableConfidence}% confidence; need ${Math.round(data.conf_gate * 100)}%`;
+      setStatus("hand found", "idle");
+    } else if (data.stable_letter && data.stable_fraction < 0.75) {
+      badgeColorVar = "--warn";
+      captionText = `Predictions vary — ${stableFraction}% consistent; need 75%`;
+      setStatus("hold steady", "idle");
     } else {
       badgeColorVar = "--accent";
-      captionText = `${pct}% confidence`;
+      captionText = data.stable_letter
+        ? `Hold steady — ${progress}% progress; recent average ${stableConfidence}%`
+        : `${pct}% current confidence — collecting stable predictions`;
+      setStatus("hold steady", "live");
       signal = true;
     }
+  } else {
+    setStatus("show hand", "idle");
   }
 
   const color = getComputedStyle(document.documentElement).getPropertyValue(badgeColorVar).trim();

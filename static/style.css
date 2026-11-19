@@ -315,6 +315,11 @@ video, canvas {
   object-fit: cover;
 }
 
+/* Server mirrors frames before detection; mirror the preview to match bbox coordinates. */
+video {
+  transform: scaleX(-1);
+}
+
 .camera-idle {
   position: absolute;
   inset: 0;

@@ -18,6 +18,8 @@ then open http://localhost:5000
 
 import base64
 import io
+import os
+import threading
 import time
 from collections import Counter, deque
 
@@ -28,10 +30,11 @@ from pypdf import PdfReader
 
 from asl_model import (
     CFG,
+    HAND_CONNECTIONS,
     LETTERS,
+    create_hands_detector,
     extract_from_image,
     load_models_for_inference,
-    mp_hands,
 )
 from braille_controller import BrailleController
 
@@ -40,11 +43,21 @@ braille_ctl = BrailleController()
 
 print("Loading models...")
 IMAGE_MODEL, LANDMARK_MODEL = load_models_for_inference()
-HANDS = mp_hands.Hands(
-    static_image_mode=False, max_num_hands=1,
-    min_detection_confidence=0.6, min_tracking_confidence=0.6,
+HANDS = create_hands_detector(
+    static_image_mode=False,
+    max_num_hands=1,
+    min_detection_confidence=0.6,
+    min_tracking_confidence=0.6,
     model_complexity=1,
 )
+HANDS_LOCK = threading.Lock()
+LAST_HAND_TIMESTAMP_MS = 0
+LANDMARK_CONNECTIONS = [
+    [int(connection.start), int(connection.end)]
+    if hasattr(connection, "start")
+    else [int(connection[0]), int(connection[1])]
+    for connection in HAND_CONNECTIONS
+]
 
 RELEASE_SECS = 0.4
 
@@ -147,16 +160,26 @@ def braille_status():
 
 @app.route("/predict", methods=["POST"])
 def predict():
+    global LAST_HAND_TIMESTAMP_MS
     payload = request.get_json(force=True)
     frame = _decode_frame(payload["image"])
     now = time.time()
     alpha = float(CFG["FUSION_ALPHA"])
     conf_gate = float(CFG["CONF_THRESHOLD"])
     stable_secs = float(CFG["STABLE_SECONDS"])
+    history_window_secs = max(stable_secs * 3.0, 3.0)
 
-    crop, vec, bbox, _hand_lms = extract_from_image(frame, HANDS)
+    with HANDS_LOCK:
+        LAST_HAND_TIMESTAMP_MS = max(
+            int(time.monotonic() * 1000), LAST_HAND_TIMESTAMP_MS + 1
+        )
+        crop, vec, bbox, hand_lms = extract_from_image(
+            frame, HANDS, timestamp_ms=LAST_HAND_TIMESTAMP_MS
+        )
 
     pred_letter, pred_conf = None, 0.0
+    landmarks_out = None
+    accepted_letter = None
     if crop is not None:
         p_img = IMAGE_MODEL(crop[None].astype(np.float32), training=False).numpy()[0]
         p_lm = LANDMARK_MODEL(vec[None], training=False).numpy()[0]
@@ -164,9 +187,17 @@ def predict():
         pred_idx = int(np.argmax(p))
         pred_letter, pred_conf = LETTERS[pred_idx], float(p[pred_idx])
         STATE["history"].append((now, pred_idx, pred_conf))
+        points = getattr(hand_lms, "landmark", hand_lms)
+        landmarks_out = [
+            {"x": float(point.x), "y": float(point.y), "z": float(point.z)}
+            for point in points
+        ]
+
+    else:
+        STATE["history"].clear()
 
     history = STATE["history"]
-    while history and now - history[0][0] > stable_secs * 1.2:
+    while history and now - history[0][0] > history_window_secs:
         history.popleft()
 
     if STATE["last_accepted"] is not None and not STATE["ready_for_repeat"]:
@@ -195,6 +226,7 @@ def predict():
             STATE["last_accepted"] = stable_letter
             STATE["ready_for_repeat"] = False
             STATE["release_start"] = None
+            accepted_letter = stable_letter
             history.clear()
 
     bbox_out = None
@@ -209,9 +241,14 @@ def predict():
         "pred_conf": pred_conf,
         "conf_gate": conf_gate,
         "stable_letter": stable_letter,
+        "stable_confidence": stable_conf,
+        "stable_fraction": stable_frac,
         "progress": progress,
+        "accepted_letter": accepted_letter,
         "sentence": STATE["sentence"],
         "bbox": bbox_out,
+        "landmarks": landmarks_out,
+        "connections": LANDMARK_CONNECTIONS,
     })
 
 
@@ -233,4 +270,7 @@ def control():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    try:
+        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")), debug=False)
+    finally:
+        HANDS.close()

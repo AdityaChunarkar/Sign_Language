@@ -1,0 +1,32 @@
+{
+  "IMG_SIZE": 224,
+  "MAX_PER_CLASS": 400,
+  "BATCH_SIZE": 32,
+  "VAL_SPLIT": 0.15,
+  "CONF_THRESHOLD": 0.7,
+  "STABLE_SECONDS": 1.0,
+  "HAND_MARGIN": 0.3,
+  "HARD_LETTERS": [
+    "A",
+    "S",
+    "T",
+    "E",
+    "M",
+    "N",
+    "R",
+    "U",
+    "V",
+    "W",
+    "P",
+    "K",
+    "G",
+    "H",
+    "X",
+    "Y"
+  ],
+  "HARD_BOOST": 1.5,
+  "HARD_OVERSAMPLE": 0.5,
+  "FUSION_ALPHA": 0.25,
+  "FOCAL_GAMMA": 2.0,
+  "PERSONAL_PER_LETTER": 150
+}

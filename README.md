@@ -73,6 +73,7 @@ never have to redo expensive steps:
 | Download | `--download` | Fetches the Kaggle ASL alphabet dataset (or use a manually placed zip) |
 | Preprocess | `--preprocess` | Runs MediaPipe Hands over every raw image, crops to the hand region, extracts a 63-dim landmark vector, caches both to `processed_asl.npz` |
 | Train | `--train` | Trains two models in parallel: an EfficientNetB0-based image classifier and a small MLP on hand landmarks |
+| Personal train | `--train-personal` | Reads the bundled `Copy of ASL_personal_dataset.zip`, trains/evaluates both branches, and exports them for the web app |
 | Evaluate | `--evaluate` | Tunes the late-fusion weight between the two models, prints a confusion matrix, and does one round of confusion-driven retraining on the most-confused letter pairs |
 | Collect personal | `--collect-personal` | Optional: capture your own hand via webcam to personalize the model |
 | Finetune | `--finetune` | Optional: fine-tunes both models on your personal samples (with replay of the original data to avoid forgetting) |
@@ -93,6 +94,20 @@ been the dominant prediction for a configurable window (`STABLE_SECONDS`)
 at high confidence (`CONF_THRESHOLD`), which prevents a hand transitioning
 between signs from spamming random letters.
 
+The personal archive contains labeled crops and recorded landmarks, not
+trained model weights. To create the export needed by `webapp.py`, run
+`python asl_model.py --train-personal` once from this directory. The first run
+may download the public MediaPipe hand-landmarker task asset and ImageNet
+EfficientNet weights. CPU-only training can take a long time; copying an
+already-trained export into `asl_project/asl_model_export/` avoids retraining.
+The validation score is an estimate on a held-out split;
+it does not guarantee the same live accuracy or confidence as a separately
+trained model.
+
+`asl_model.py` supports both MediaPipe's legacy `mp.solutions` API and the
+newer `mp.tasks.vision.HandLandmarker` API. On a newer MediaPipe release, the
+task asset is saved under the ignored `asl_project/models/` directory.
+
 ### Web version (`webapp.py` + `/predict`)
 
 The browser captures a webcam frame every 200ms (`static/app.js`), sends it
@@ -106,6 +121,10 @@ as a base64 JPEG to `POST /predict`, and the server:
    handling was needed).
 4. Returns the predicted letter, confidence, stabilization progress, hand
    bounding box (for the on-canvas overlay), and the built-up sentence.
+
+The sign page reduces oversized camera frames to at most 640x480 before
+sending them for inference. It also draws the 21 hand landmarks and reports
+the current hold progress and average confidence while a letter is stabilizing.
 
 `POST /control` handles Space / Backspace / Clear on the sentence.
 
@@ -181,18 +200,22 @@ asl_project/            Generated at runtime — dataset cache, model
 py -3.11 -m venv .venv311
 & ".venv311\Scripts\python.exe" -m pip install -r requirements.txt
 
-# one-time: train + export a model (see asl_model.py stages above),
-# or copy in an already-exported asl_project/asl_model_export/ folder
+# one-time: train and export from the bundled personal dataset
+& ".venv311\Scripts\python.exe" asl_model.py --train-personal
 
 & ".venv311\Scripts\python.exe" webapp.py
 ```
 
+On macOS/Linux, use the same commands with `.venv/bin/python` instead of
+`.venv311\Scripts\python.exe`.
+
+If port 5000 is already occupied on macOS (for example by AirPlay Receiver),
+start the app on another port with `PORT=5001 .venv/bin/python webapp.py` and
+open `http://localhost:5001`.
+
 Then open `http://localhost:5000` (Sign → Text) or `http://localhost:5000/braille`
 (Text → Braille). The server binds to `0.0.0.0`, so it's also reachable from
 other devices on the same network at `http://<your-LAN-IP>:5000`.
-
-**Note:** Python 3.11 or 3.12 is required — TensorFlow and MediaPipe don't
-yet publish wheels for newer Python releases.
 
 ## Why the braille page can't be hosted publicly
 

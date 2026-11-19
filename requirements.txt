@@ -7,8 +7,8 @@
 #   pip install --upgrade "protobuf>=5.28,<6"
 # mediapipe works fine on the protobuf 5 runtime; its own pin is overly strict.
 
-tensorflow>=2.16
-mediapipe==0.10.14
+# tensorflow
+# mediapipe
 opencv-python
 numpy
 matplotlib
@@ -19,3 +19,12 @@ kaggle
 flask
 pyserial
 pypdf
+tensorflow>=2.16
+mediapipe>=0.10.14
+numpy
+pandas
+matplotlib
+seaborn
+scikit-learn
+tqdm
+kaggle
